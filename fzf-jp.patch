@@ -1,0 +1,197 @@
+diff --git a/glide.lock b/glide.lock
+index f735fe8..00bba2e 100644
+--- a/glide.lock
++++ b/glide.lock
+@@ -1,18 +1,52 @@
+-hash: b617c76661b399f586276767bb93ee67b65dd03cfd1348ecad409e372ea97b3e
+-updated: 2018-06-27T18:37:20.189962-07:00
++hash: 30c6a3f63f58be88d0bf798e45fb0ada322ea555500693e3f59425f192d17805
++updated: 2018-11-26T18:48:49.3013759+09:00
+ imports:
+ - name: github.com/codegangsta/cli
+-  version: c6af8847eb2b7b297d07c3ede98903e95e680ef9
++  version: cfb38830724cc34fedffe9a2a29fb54fa9169cd1
+ - name: github.com/gdamore/encoding
+   version: b23993cbb6353f0e6aa98d0ee318a34728f628b9
+ - name: github.com/gdamore/tcell
+   version: 0a0db94084dfe181108c18508ebd312f12d331fb
+   subpackages:
+   - encoding
++- name: github.com/koron/gelatin
++  version: 88d6a03ce765003ffefdb04176443e76011486ff
++  subpackages:
++  - trie
++- name: github.com/koron/go-skkdict
++  version: 1bfa372d61d2867aaa97f98033fcb1637ce965f1
++- name: github.com/koron/gomigemo
++  version: ecc19e3cccb46036b3e4adfcbf2ddc6f321014c2
++  subpackages:
++  - conv
++  - dict
++  - embedict
++  - inflator
++  - migemo
++  - readutil
+ - name: github.com/lucasb-eyer/go-colorful
+   version: c900de9dbbc73129068f5af6a823068fc5f2308c
++- name: github.com/Masterminds/glide
++  version: 9ef6ca313b3200079861f2de4e567b1d22081d19
++  subpackages:
++  - action
++  - cache
++  - cfg
++  - dependency
++  - gb
++  - godep
++  - godep/strip
++  - gom
++  - gpm
++  - importer
++  - mirrors
++  - msg
++  - path
++  - repo
++  - tree
++  - util
+ - name: github.com/Masterminds/semver
+-  version: 15d8430ab86497c5c0da827b748823945e1cf1e1
++  version: c7af12943936e8c39859482e61f0574c2fd7fc75
+ - name: github.com/Masterminds/vcs
+   version: 6f1c6d150500e452704e9863f68c2559f58616bf
+ - name: github.com/mattn/go-isatty
+diff --git a/glide.yaml b/glide.yaml
+index e6dbb27..ec33784 100644
+--- a/glide.yaml
++++ b/glide.yaml
+@@ -14,3 +14,5 @@ import:
+   version: 558b6879de74bc843225cde5686419267ff707ca
+   subpackages:
+   - ssh/terminal
++- package: github.com/koron/gomigemo
++  version: ecc19e3cccb46036b3e4adfcbf2ddc6f321014c2
+diff --git a/src/algo/algo.go b/src/algo/algo.go
+index 2fe5c09..4e88cf5 100644
+--- a/src/algo/algo.go
++++ b/src/algo/algo.go
+@@ -84,6 +84,7 @@ import (
+ 	"unicode"
+ 	"unicode/utf8"
+ 
++	"github.com/junegunn/fzf/src/migemo"
+ 	"github.com/junegunn/fzf/src/util"
+ )
+ 
+@@ -338,6 +339,15 @@ func debugV2(T []rune, pattern []rune, F []int32, lastIdx int, H []int16, C []in
+ 	}
+ }
+ 
++func Migemo(caseSensitive bool, normalize bool, forward bool, text *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
++	i := migemo.FindStringIndex(text.ToString(), string(pattern))
++	if i != nil {
++		return Result{i[0], i[0] + i[1], i[1] - i[0]}, nil
++	} else {
++		return Result{-1, -1, 0}, nil
++	}
++}
++
+ func FuzzyMatchV2(caseSensitive bool, normalize bool, forward bool, input *util.Chars, pattern []rune, withPos bool, slab *util.Slab) (Result, *[]int) {
+ 	// Assume that pattern is given in lowercase if case-insensitive.
+ 	// First check if there's a match and calculate bonus for each position.
+diff --git a/src/migemo/migemo.go b/src/migemo/migemo.go
+new file mode 100644
+index 0000000..0e8b5f2
+--- /dev/null
++++ b/src/migemo/migemo.go
+@@ -0,0 +1,60 @@
++package migemo
++
++import (
++	"os"
++	"regexp"
++	"sync"
++	"unicode/utf8"
++
++	"github.com/koron/gomigemo/embedict"
++	"github.com/koron/gomigemo/migemo"
++)
++
++var cache map[string]*regexp.Regexp
++var dict migemo.Dict
++var mutex *sync.Mutex
++
++func init() {
++	mutex = new(sync.Mutex)
++	cache = make(map[string]*regexp.Regexp)
++	var err error
++	dict, err = embedict.Load()
++	if err != nil {
++		errorExit(err.Error())
++	}
++}
++
++func errorExit(msg string) {
++	os.Stderr.WriteString(msg + "\n")
++	os.Exit(2)
++}
++
++func regex(pattern string) *regexp.Regexp {
++	mutex.Lock()
++	defer mutex.Unlock()
++
++	v, ok := cache[pattern]
++	if ok {
++		return v
++	}
++
++	re, err := migemo.Compile(dict, pattern)
++	if err != nil {
++		errorExit(err.Error())
++	}
++
++	cache[pattern] = re
++	return re
++}
++
++func FindStringIndex(s, pattern string) []int {
++	v := regex(pattern)
++
++	if i := v.FindStringIndex(s); len(i) != 0 {
++		b := []byte(s)
++		subString := string(b[i[0]:i[1]])
++		return []int{utf8.RuneCountInString(s[0:i[0]]), utf8.RuneCountInString(subString)}
++	}
++
++	return nil
++}
+diff --git a/src/pattern.go b/src/pattern.go
+index 2627dea..c44659f 100644
+--- a/src/pattern.go
++++ b/src/pattern.go
+@@ -26,6 +26,7 @@ const (
+ 	termPrefix
+ 	termSuffix
+ 	termEqual
++	termMigemo
+ )
+ 
+ type term struct {
+@@ -145,6 +146,7 @@ func BuildPattern(fuzzy bool, fuzzyAlgo algo.Algo, extended bool, caseMode Case,
+ 	ptr.procFun[termExact] = algo.ExactMatchNaive
+ 	ptr.procFun[termPrefix] = algo.PrefixMatch
+ 	ptr.procFun[termSuffix] = algo.SuffixMatch
++	ptr.procFun[termMigemo] = algo.Migemo
+ 
+ 	_patternCache[asString] = ptr
+ 	return ptr
+@@ -187,6 +189,11 @@ func parseTerms(fuzzy bool, caseMode Case, normalize bool, str string) []termSet
+ 			text = text[:len(text)-1]
+ 		}
+ 
++		if strings.HasPrefix(text, "/") {
++			typ = termMigemo
++			text = text[1:]
++		}
++
+ 		if strings.HasPrefix(text, "'") {
+ 			// Flip exactness
+ 			if fuzzy && !inv {
